@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import ROUTERS
+from app.services import yard_capacity
 from app.store import store
 
 app = FastAPI(title="港口集装箱作业调度平台", version="1.0.0")
@@ -35,4 +36,6 @@ def health() -> dict[str, object]:
 @app.get("/api/overview")
 def overview() -> dict[str, object]:
     """运营概览：把各业务模块的待处理量汇总成看板卡片。"""
+    # 先按堆存单对账箱区占用，刷新看板时箱区状态与箱位数据保持一致
+    yard_capacity.reconcile()
     return store.overview()
