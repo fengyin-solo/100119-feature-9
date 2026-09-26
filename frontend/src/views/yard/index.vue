@@ -18,6 +18,14 @@
       </article>
     </div>
 
+    <div v-if="missingBlocks.length" class="notice-bar">
+      <strong>箱位数据缺失（{{ missingBlocks.length }} 个箱区）：</strong>
+      <span v-for="block in missingBlocks" :key="String(block.id)" class="notice-tag">
+        {{ block['箱区编号'] }} {{ block['箱区名称'] }}
+      </span>
+      <span class="notice-tip">以上箱区缺少堆放层数或可用箱位，无法判定容量上限，补全资料前不能接收堆存单。</span>
+    </div>
+
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
         <span>{{ field }}</span>
@@ -36,7 +44,7 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">{{ displayCell(row, column) }}</td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -67,19 +75,28 @@ import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | boolean | null>
 
 const ENDPOINT = '/api/yard'
-const columns = ["箱区编号", "箱区名称", "堆放层数", "可用箱位", "已用箱位", "所属堆场", "责任人", "箱区状态"]
+const columns = ["箱区编号", "箱区名称", "堆放层数", "可用箱位", "已用箱位", "容量上限", "占用率", "可继续堆放", "所属堆场", "责任人", "箱区状态"]
 const actions = ["启用箱区", "封闭箱区", "腾空箱区"]
 const statuses = ["待启用", "正常堆放", "接近满载", "已封闭"]
 const stats = [{"label": "在用箱区", "value": 0}, {"label": "接近满载箱区", "value": 0}, {"label": "可用箱位总数", "value": 0}]
 
 const rows = ref<Row[]>([])
+const missingBlocks = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+function displayCell(row: Row, column: string) {
+  const value = row[column]
+  if (value === null || value === undefined || value === '') return '—'
+  if (column === '可继续堆放') return value ? '可堆放' : '不可堆放'
+  if (column === '占用率') return `${value}%`
+  return value
+}
 
 function resetFilters() {
   filters.value = {}
@@ -99,10 +116,11 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
-      throw new Error('堆场管理动作未生效，请稍后重试')
+    const payload = await response.json()
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.message ?? payload.detail ?? '堆场管理动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
@@ -114,13 +132,20 @@ async function reload() {
   errorMessage.value = ''
   const query = new URLSearchParams(filters.value as Record<string, string>).toString()
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
+    const [response, missingResponse] = await Promise.all([
+      request(`${ENDPOINT}?${query}`),
+      request(`${ENDPOINT}?slot_missing=true&size=200`),
+    ])
     if (!response.ok) {
       throw new Error('箱区列表读取失败')
     }
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    if (missingResponse.ok) {
+      const missingPayload = await missingResponse.json()
+      missingBlocks.value = missingPayload.items ?? []
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '堆场管理列表读取失败'
   }
@@ -128,3 +153,29 @@ async function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.notice-bar {
+  background: #fffaeb;
+  border: 1px solid #fedf89;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #93370d;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.notice-tag {
+  background: #fff;
+  border: 1px solid #fedf89;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.notice-tip {
+  color: var(--muted);
+  font-size: 12px;
+}
+</style>

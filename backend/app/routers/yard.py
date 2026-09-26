@@ -6,11 +6,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.yard import YardService
+from app.services.yard import yard_service
 
 router = APIRouter(prefix="/api/yard", tags=["堆场管理"])
 
-service = YardService()
+service = yard_service
 
 LIST_FIELDS = ["箱区编号", "箱区名称", "堆放层数", "可用箱位", "已用箱位", "所属堆场", "责任人", "箱区状态"]
 STATUSES = ["待启用", "正常堆放", "接近满载", "已封闭"]
@@ -20,13 +20,14 @@ STATUSES = ["待启用", "正常堆放", "接近满载", "已封闭"]
 def list_entries(
     keyword: str | None = Query(default=None, description="按箱区编号检索"),
     status: str | None = Query(default=None, description="待启用、正常堆放、接近满载、已封闭"),
+    slot_missing: bool = Query(default=False, description="只列出箱位数据缺失（堆放层数/可用箱位）的箱区"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
     """按箱区编号与状态过滤堆场管理列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    items, total = service.list_entries(keyword=keyword, status=status, slot_missing=slot_missing, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
 
 
@@ -41,11 +42,11 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条箱区，缺字段时说明原因而不是静默丢弃。"""
-    entry, missing = service.create_entry(payload.values)
-    if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
-    return ActionResult(ok=True, message="箱区已登记", entry=entry)
+    """登记一条箱区，缺字段或编号重复时说明原因而不是静默丢弃。"""
+    entry, message = service.create_entry(payload.values)
+    if entry is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=entry)
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
